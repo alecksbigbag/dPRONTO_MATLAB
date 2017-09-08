@@ -82,7 +82,7 @@ hh = t_f/(N-1);
 
 %[x, u] = projectionOperator(x0, u0, Q_prj, R_prj, hh, h_dyn, h_dyn12);
 
-if project_init_trajectory
+if project_init_trajectory 
     % Determine intitial trajectory by trajecting (??) initial curve 
     % Choose terminal gain
     [F_x, F_u] = dynamics12(h_dyn12, x0, u0, dyn_params, hh);
@@ -90,6 +90,7 @@ if project_init_trajectory
         [~, P_prj(:,:,N)] = dlqr(F_x(:,:,N), F_u(:,:,N), Q_prj, R_prj);
         P_prj(:,:,N) = scale_P_N_prj*P_prj(:,:,N);
     catch
+        error('something wrong with designing the regulator');
         disp('Unable to find suitable P');
         P_prj(:,:,N) = 2000*eye(n); % hack ...
     end
@@ -98,11 +99,11 @@ if project_init_trajectory
     % Design projection operator gain (AS Jun 15, 2017: to be improved...)
     for kk=N-1:-1:1
         f_x = F_x(:,:,kk); f_u = F_u(:,:,kk);
-        %P_prj(:,:,kk) = f_x'*P_prj(:,:,kk+1)*f_x + Q_prj - (f_x'*P_prj(:,:,kk+1)*f_u)*inv(f_u'*P_prj(:,:,kk+1)*f_u + R_prj)*(f_u'*P_prj(:,:,kk+1)*f_x);
-        %K_prj(:,:,kk) = inv(f_u'*P_prj(:,:,kk+1)*f_u + R_prj)*(f_u'*P_prj(:,:,kk+1)*f_x);
+        P_prj(:,:,kk) = f_x'*P_prj(:,:,kk+1)*f_x + Q_prj - (f_x'*P_prj(:,:,kk+1)*f_u)*inv(f_u'*P_prj(:,:,kk+1)*f_u + R_prj)*(f_u'*P_prj(:,:,kk+1)*f_x);
+        K_prj(:,:,kk) = inv(f_u'*P_prj(:,:,kk+1)*f_u + R_prj)*(f_u'*P_prj(:,:,kk+1)*f_x);
         
-        P_prj(:,:,kk) = Q_prj + f_x'*(P_prj(:,:,kk+1) - P_prj(:,:,kk+1)'*f_u*(R_prj + f_u'*P_prj(:,:,kk+1)*f_u)^(-1)*f_u'*P_prj(:,:,kk+1))*f_x;
-        K_prj(:,:,kk) = (R_prj + f_u'*P_prj(:,:,kk)*f_u)^(-1)*f_u'*P_prj(:,:,kk)*f_x;
+        % P_prj(:,:,kk) = Q_prj + f_x'*(P_prj(:,:,kk+1) - P_prj(:,:,kk+1)'*f_u*(R_prj + f_u'*P_prj(:,:,kk+1)*f_u)^(-1)*f_u'*P_prj(:,:,kk+1))*f_x;
+        % K_prj(:,:,kk) = (R_prj + f_u'*P_prj(:,:,kk)*f_u)^(-1)*f_u'*P_prj(:,:,kk)*f_x;
     end
     
     % Compute projected trajectory
@@ -123,6 +124,24 @@ else
     end
     u = u0;
 end
+
+
+if 1 % compare initial trajector with its projection
+  t_vec = hh*[0:N-1];
+  figure(10000000)
+  subplot(211)
+    plot(t_vec, x0, t_vec, x)
+    grid on
+  subplot(212)
+    plot(t_vec(1:end-1), u0, t_vec(1:end-1), u)
+    grid on
+  pause
+end
+
+
+figure(1000)
+  hold on, grid on
+  plot3(x(1,:),x(3,:),x(5,:),'linewidth',2);
 
 output{1}.x = x;
 output{1}.u = u;
@@ -196,7 +215,7 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
     %
     % Add a figure to how the integrant related to cost is
         
-    if plot_intermediates
+    if 1 % plot_intermediates    
       figure(200), clf
         subplot(311)
           plot(running_cost(x,u, x_des, u_des, cost_params))  % a HACK ... missing function in Remon implementation
@@ -417,7 +436,6 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
             
       % AS Jun 16, 2017
       % force 1.5 order descent formulas for small ii
-            
       if (ii < numFirstOrderIters)
         isConvex = 0; 
       else
@@ -466,7 +484,82 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
     grid on, zoom on
     
     figure(1)
+    
+    
+    % Compute associated zeta = (z,v) discent direction
+    
+    z       = zeros(n, N);        % Implies initial condition z(:,1) = 0;
+    v       = zeros(m, N-1);      % recall that in disc time with ZOH,
+                                    % input dimension is smaller than state
+            
+    desc1 = 0; % FIRST derivative of the cost in the descent direction
+               % desc1 should always match with the first derivative
+               % of the nonlinear cost
+                 
+    desc2 = 0; % SECOND derivative of the cost in the descent direction
+               % desc2 matches the second derivative of the nonlinear cost
+               % only when 2nd order derivs are fully used
+               
+    % Compute linear trajectory (solution to LQ problem)
+            
+    for kk=1:N-1
+      % AS 26 Aug 2017 - E is the optimal feedback, F is the feedforward
+      %                  They are the solution of the Riccati equation
+      %                  and the feedforward equation due to the linear
+      %                  term in the LT problem
         
+      v(:,kk)   = E(:,:,kk)*z(:,kk) + F(:,kk); % optimal feedback
+      z(:,kk+1) = F_x(:,:,kk)*z(:,kk) + F_u(:,:,kk)*v(:,kk); % z^+ = Az + Bv
+
+      desc1 = desc1 + L_x(:,kk)'*z(:,kk) + L_u(:,kk)'*v(:,kk);
+                
+      % AS Jun 17, 2017 I must say I am PUZZLED not to see the
+      % the presence of the multiplier q ...
+      % *** NEED TO CHECK THE CORRECTNESS OF THESE FORMULAS ***
+      % Alfter all, this should be the matrix W in the standard
+      % implementation of PRONTO (Hessian l + q_i Hessian f_i)
+       
+      desc2 = desc2 + 1/2 * z(:,kk)'*L_xx(:,:,kk)*z(:,kk) ...
+                      +       v(:,kk)'*L_ux(:,:,kk)*z(:,kk) ...
+                      + 1/2 * v(:,kk)'*L_uu(:,:,kk)*v(:,kk);
+                    
+      % AS 26 Aug 2017 - Possible fix ? No difference for linear dynamics
+      % as in that case D2f are all zeros
+      
+      %         desc2 = desc2 + 1/2 * z(:,kk)'*W_xx(:,:,kk)*z(:,kk) ...
+      %                       +       v(:,kk)'*W_ux(:,:,kk)*z(:,kk) ...
+      %                       + 1/2 * v(:,kk)'*W_uu(:,:,kk)*v(:,kk);
+      
+                    
+    end
+            
+    % add contribution of the terminal cost
+    %
+    % AS 26 Aug 2017 - Once again, this programming style should be
+    % changed... storing even the derivative of the terminal cost in L_x
+    % is very confusiong and prone to generate bugs/misinterpretations
+    %
+    desc1 = desc1 + L_x(:,N)'*z(:,N);
+    desc2 = desc2 + 1/2 * z(:,N)'*L_xx(:,:,N)*z(:,N);
+    
+    epsilon
+    delta
+    
+    desc1
+    desc2
+            
+    
+  
+    % AS 30 Aug 2017 - Visualize the descent direction on the 3D figure
+    
+    figure(1000)
+      hold on, grid on
+      plot3(x(1,:)+z(1,:),x(3,:)+z(3,:),x(5,:)+z(5,:),'r--');
+    %figure end    
+    
+    
+  
+    
     % --- Forward sweep -----------------------------------------------
     % PRONTO essentially has two forward sweeps. First a trajectory of
     % the linearized dynamics is computed. This trajectory serves as
@@ -474,81 +567,14 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
     % sweep computes a projection of:
     % PROJ[(nominal trajectory) + (step length)*(descent direction)]
     % and uses Armijo's rule to determine a suitable step length.
-        
+    
+    
     gamma = 1; % this is the step length (when = 1, it means full step)
-        
+     
+    
     % This is the backtracking line search using Armijo's rule
     for jj = 1:maxStepLenghtIter 
-            
-      z       = zeros(n, N);        % Implies initial condition z(:,1) = 0;
-      v       = zeros(m, N-1);      % recall that in disc time with ZOH, 
-                                    % input dimension is smaller than state
-            
-      desc1 = 0; % FIRST derivative of the cost in the descent direction
-                 % desc1 should always match with the first derivative
-                 % of the nonlinear cost
-                 
-      desc2 = 0; % SECOND derivative of the cost in the descent direction
-                 % desc2 matches the second derivative of the nonlinear cost
-                 % only when 2nd order derivs are fully used
-
-      % Compute linear trajectory (solution to LQ problem)
-            
-      for kk=1:N-1 
-        % AS 26 Aug 2017 - E is the optimal feedback, F is the feedforward
-        %                  They are the solution of the Riccati equation
-        %                  and the feedforward equation due to the linear
-        %                  term in the LT problem
-        
-        v(:,kk)   = E(:,:,kk)*z(:,kk) + F(:,kk); % optimal feedback
-        z(:,kk+1) = F_x(:,:,kk)*z(:,kk) + F_u(:,:,kk)*v(:,kk); % z^+ = Az + Bv
-
-        desc1 = desc1 + L_x(:,kk)'*z(:,kk) + L_u(:,kk)'*v(:,kk);
-                
-        % AS Jun 17, 2017 I must say I am PUZZLED not to see the 
-        % the presence of the multiplier q ... 
-        % *** NEED TO CHECK THE CORRECTNESS OF THESE FORMULAS ***
-        % Alfter all, this should be the matrix W in the standard
-        % implementation of PRONTO (Hessian l + q_i Hessian f_i)
-       
-        desc2 = desc2 + 1/2 * z(:,kk)'*L_xx(:,:,kk)*z(:,kk) ... 
-                      +       v(:,kk)'*L_ux(:,:,kk)*z(:,kk) ...
-                      + 1/2 * v(:,kk)'*L_uu(:,:,kk)*v(:,kk);
-                    
-% AS 26 Aug 2017 - Possible fix ? No difference for linear dynamics
-% as in that case D2f are all zeros 
-
-%         desc2 = desc2 + 1/2 * z(:,kk)'*W_xx(:,:,kk)*z(:,kk) ... 
-%                       +       v(:,kk)'*W_ux(:,:,kk)*z(:,kk) ...
-%                       + 1/2 * v(:,kk)'*W_uu(:,:,kk)*v(:,kk);
-                    
-                    
-      end
-            
-      % add contribution of the terminal cost
-      %
-      % AS 26 Aug 2017 - Once again, this programming style should be
-      % changed... storing even the derivative of the terminal cost in L_x
-      % is very confusiong and prone to generate bugs/misinterpretations
-      %
-      desc1 = desc1 + L_x(:,N)'*z(:,N); 
-      desc2 = desc2 + 1/2 * z(:,N)'*L_xx(:,:,N)*z(:,N); 
-            
-      epsilon
-      delta
-            
-      desc1
-      desc2 
-            
-      
-      % AS 26 Aug 2017 - Now that I think about, the missing q terms
-      % in the computations of the running cost of the LQ problem could
-      % explain why the gradient of the cost desc1 sometimes becomes positive
-      % (nonsense!) and consequently the following alert becomes active
-      if desc1 > 0
-        error('something wrong - positive descent!')
-      end
-            
+ 
             
       % AS Jun 16, 2017. The following was nonsense. 
       %                  The projection operator should not be
@@ -588,9 +614,83 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
       % compute cost associated to xi_gamma = P (xi + gamma*zeta)
       c_gamma = costfun(h_cost, h_con, x_gamma, u_gamma, x_des, u_des, cost_params, delta, epsilon);
             
+ 
+      % AS 30 Aug 2017 New debug plot (x, u, z, v, and cost along (z,v))
+      if 1
+        plot_colors = 'kbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmy';
+        t = linspace(0, t_f, N);
+        
+        figure(500)
+        subplot(231),cla, hold on
+          for bb=1:n % state 
+            plot(t, x(bb,:), plot_colors(bb));
+          end
+        grid on, zoom on
+        subplot(232), cla,  hold on
+          for bb=1:m % input
+            plot(t(1:end-1), u(bb,:), plot_colors(bb));
+          end
+        grid on, zoom on  
+       
+        subplot(234), cla, hold on % discent direction state
+          for bb=1:n
+            plot(t, z(bb,:), plot_colors(bb));
+          end
+        grid on, zoom on
+        subplot(235), cla, hold on % discent directin input
+          for bb=1:m
+            plot(t(1:end-1), v(bb,:), plot_colors(bb));
+          end
+        grid on, zoom on
+    
+        
+        % Compute h ( P( xi + gamma zeta ) ) for different gammas 
+        gamma_vec= 0:0.005:1;
+        xx_prj = zeros(n,N); xx_prj(:,1) = x(:,1);
+        uu_prj = zeros(m,N-1);
+        desc1_temp = []; desc2_temp = 0;
+        for bb = 1:length(gamma_vec)
+          for cc=1:N-1
+            uu_prj(:,cc) = (u(:,cc) + gamma_vec(bb)*v(:,cc)) + K_prj(:,:,cc)*((x(:,cc) + gamma_vec(bb)*z(:,cc)) - xx_prj(:,cc));
+            xx_prj(:,cc+1) = dynamics(h_dyn, xx_prj(:,cc), uu_prj(:,cc), dyn_params, hh);
+          end
+          costs_prj(bb) = costfun(h_cost, h_con, xx_prj, uu_prj, x_des, u_des, cost_params, delta, epsilon);
+        end
+        
+        % Plot descent in cost
+        if jj == 1
+          subplot(2,3,6), cla, grid on, hold on
+            plot(gamma_vec, c + gamma_vec*desc1 + gamma_vec.^2*desc2, 'k--');
+            plot(gamma_vec, costs_prj, 'k');
+            plot(gamma,c_gamma,'o',0,c,'*','MarkerFaceColor',[0 0 0],'MarkerSize',5)
+            h = fill([0, 0, 1, 1], [c, c + desc1, c + desc1, c + alpha*desc1], 'b');
+            set(h,'FaceAlpha',0.1);
+            set(h,'EdgeColor','None');
+            xlabel('Step length [-]'), ylabel('Cost [-]'), hold off
+            
+          title(sprintf('Change in cost  (iteration %i,%i)', ii, jj))
+        else
+          subplot(2,3,6), hold on
+            plot(gamma, c_gamma, 'o','MarkerFaceColor',[0 0 0],'MarkerSize',5)
+            hold off
+          title(sprintf('Change in cost  (iteration %i,%i)', ii, jj))
+        end
+        
+          % AS 26 Aug 2017 - Now that I think about, the missing q terms
+          % in the computations of the running cost of the LQ problem could
+          % explain why the gradient of the cost desc1 sometimes becomes positive
+          % (nonsense!) and consequently the following alert becomes active
+          if desc1 > 0
+            error('something wrong - positive descent!')
+          end
+        
+        pause
+      end
+      
+      
+      
       % Plot diagnostics --------------------------------------------
-    if plot_intermediates
-%       if 1
+      if plot_intermediates
         plot_colors = 'kbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmykbgrcmy';
         
         % Plot states (old, new, projection)
@@ -737,26 +837,27 @@ for mm = 1: maxConstraintIter % this loop updates epsilon (continuation)
       descent = -desc1;
     end
     
-%     figure(10000)
-%       if ii == 1 
-%         clf 
-%       end 
-%       hold on
-%       plot(ii,log(descent),'+')
-%       grid on, zoom on
-%     figure(1)
+    figure(10000)
+      if ii == 1 
+        clf 
+      end 
+      hold on
+      plot(ii,log(descent),'+')
+      grid on, zoom on
+    figure(1)
     
     % If enabled, print diagnostic information
     [c, ~, c_con] = costfun(h_cost, h_con, x, u, x_des, u_des, cost_params, delta, epsilon);
     print_diagnostics_iteration(print_diagnostics, ii, c, c_con, descent, gamma, isPD_count, delta, epsilon);
     
-    if plot_intermediates
+%     if plot_intermediates
       % AS Jun 16, 2017 Plot the current iterate around the sphere
       figure(1000)
         hold on, grid on
-        plot3(x(1,:),x(3,:),x(5,:));
+        plot3(x(1,:),x(3,:),x(5,:),'linewidth',2);
+        
       %figureEND  
-    end
+%     end
     
     % Store detailed information in struct.
     output{end+1}.x = x;
